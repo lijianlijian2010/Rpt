@@ -1,0 +1,3 @@
+from bug2html import *
+
+print bug2html.convert(json={'Bug List':[{"Status": "closed", "Priority": "P2", "Cycle_ID": 65172, "Reporter": "houx", "Summary": "Remove netstack failed after add netstack instance name with vmotion", "Bug_ID": "1669964", "Case_num": 1, "Assigned_to": "netster", "Case_name": "ConnectionIsolation"}, {"Status": "closed", "Priority": "P0", "Cycle_ID": 65172, "Reporter": "houx", "Summary": "Hostd Crash when create 54 vmknic from VC", "Bug_ID": "1665299", "Case_num": 1, "Assigned_to": "kirand", "Case_name": "Limitation-Vmknic"}],'RFC_Jian':2}, order_list=['Status','Priority','Cycle_ID',"Reporter","Summary","Bug_ID","Assigned_to"])
