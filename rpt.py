@@ -534,10 +534,8 @@ def main(args):
 
         # innitial url and almsession
         almUrl = ALMUrl(cmdOpts.domain, cmdOpts.project)
-        #user = raw_input('username:')
-        #password = getpass.getpass('password:')
-        user = 'lij'
-        password = 'You5rong!'
+        user = raw_input('username:')
+        password = getpass.getpass('password:')
         almSession = ALMSession(user, password)
 
         # authenticate
