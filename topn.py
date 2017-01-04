@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # ! /usr/bin/python
-from __future__ import division
 import json
 import logging
 import os
@@ -29,9 +28,11 @@ def process_args(args):
 
 def setup_logging(logdir):
     global log
-    logfile = os.path.join(logdir, 'topn.log')
-    log = logging.getLogger('ABCD')
-    logging.basicConfig(format='%(asctime)s %(lineno)d %(levelname)-8s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p',
+    log_format = '%(asctime)s %(lineno)d %(levelname)-6s %(message)s'
+    date_format = '%m/%d/%Y %I:%M:%S %p'
+    logfile = logdir + os.sep + __name__ + '.log'
+    log = logging.getLogger(__name__)
+    logging.basicConfig(format=log_format, datefmt=date_format,
                         level=logging.DEBUG)
     log.setLevel(loglevel)
 
@@ -45,7 +46,7 @@ def setup_logging(logdir):
 
 
 def collect_topn(resultdir, file_filter):
-    error_cases = {}
+    err_cases = {}
     all_bug = {}
     file_name = 'Rpt-'+file_filter+'*.json'
     for filename in glob.glob(os.path.join(resultdir, file_name)):
@@ -54,59 +55,51 @@ def collect_topn(resultdir, file_filter):
             bug_data = json.load(json_data)
         for old_bug in bug_data:
             #print old_bug
-            Case_name = old_bug['Case_name']
+            CaseName = old_bug['CaseName']
             bug_id = old_bug['Bug_ID']
-            print "Dealing with Bug: " + bug_id + " Case Name: " + Case_name
-            old_bug.pop('Case_name')
-            old_bug.pop('Case_num')
+            print "Dealing with Bug: " + bug_id + " Case Name: " + CaseName
+            old_bug.pop('CaseName')
+            old_bug.pop('Case_Num')
             all_bug[bug_id] = old_bug
 
-            case_list = Case_name.split('<br/>')
+            case_list = CaseName.split('<br/>')
             for case_name in case_list:
-                if case_name in error_cases.keys():
-                    that_bug_list = error_cases[case_name]['bugIDs']
+                if case_name in err_cases.keys():
+                    that_bug_list = err_cases[case_name]['bugIDs']
                     if bug_id in that_bug_list:
-                        print "bug_id (" + bug_id + ") is already been in the list."
+                        log.info("bug_id [%] is already been in the list." \
+                                % bug_id)
                     else:
-                        error_cases[case_name]['bugIDs'].append(bug_id)
-                        error_cases[case_name]['bug_nums'] += 1
+                        err_cases[case_name]['bugIDs'].append(bug_id)
+                        err_cases[case_name]['bug_nums'] += 1
                 else:
-                    error_cases[case_name] = {'bug_nums': 1, 'bugIDs': [bug_id]}
-                    print "=================== ERROR_CASES ======================"
-                    print error_cases
-                    print "================================================="
-    sorted_cases = sorted(error_cases, key=lambda x: error_cases[x]['bug_nums'])
+                    err_cases[case_name] = {'bug_nums': 1, 'bugIDs': [bug_id]}
+                    log.debug(err_cases)
+    sorted_cases = sorted(err_cases, key=lambda x: err_cases[x]['bug_nums'])
     sorted_cases.reverse()
 
-    html_data = ["<center><h1>TopN Error Cases of All %s</h1></center>\n" % file_filter]
+    html_data = ["<center><h1>TopN Error Cases of All %s</h1></center>\n" \
+            % file_filter]
 
-    cases_num = len(error_cases.keys())
-    sum1_data = '<table border="0"><tr><th align=left>Failed Cases Number: %d</th></tr>' % cases_num
-    sum2_data = '<tr><th align=left>Generated Bugs Number: %d</th></tr></table>' % len(all_bug.keys())
-
+    cases_num = len(err_cases.keys())
+    sum1_data = '<table border="0"><tr><th align=left>Failed Cases Number: ' \
+            + '%d</th></tr>' % cases_num
+    sum2_data = '<tr><th align=left>Generated Bugs Number: ' \
+            + '%d</th></tr></table>' % len(all_bug.keys())
     html_data.append(sum1_data + sum2_data + '<br>\n')
 
-    order = ['Bug_ID', 'Priority', 'Status', 'Reporter', 'Assigned_to', 'Cycle_ID', 'Summary']
+    order = ['Bug_ID', 'Priority', 'Status', 'Reporter', \
+            'Assignee', 'TestSet', 'Summary']
     for entry in sorted_cases:
-        print "================================================="
-        print entry
-        print "================================================="
-        bug_detail_list = [ all_bug[bug_id] for bug_id in sorted(error_cases[entry]['bugIDs']) ]
-        print "---------------------------------------------------------"
-        print bug_detail_list
-        print "================================================="
-
-        aaa= bug2html.convert(json={
-           entry: error_cases[entry]['bug_nums'],
-           'Bug List': bug_detail_list
-           },order_list=order)
-        print "---------------------------------------------------------"
-        print aaa
-        print "---------------------------------------------------------"
-        html_data.append(bug2html.convert(json={
-           entry: error_cases[entry]['bug_nums'],
-           'Bug List': bug_detail_list
-           },order_list=order))
+        log.debug(entry)
+        sorted_id = sorted(err_cases[entry]['bugIDs'])
+        bug_detail_list = [ all_bug[bug_id] for bug_id in sorted_id ]
+        log.debug(bug_detail_list)
+        my_json = {entry: err_cases[entry]['bug_nums'],
+                'Bug List': bug_detail_list}
+        html_text = bug2html.convert(json=my_json, order_list=order)
+        log.debug(html_text)
+        html_data.append(html_text)
 
     html_file = "TopN-%s.html" % file_filter
     all_str = '\n<br/>'.join(html_data)
