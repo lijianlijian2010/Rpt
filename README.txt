@@ -30,6 +30,7 @@ python reporttool_v6.0.py -r /home/jian/tr/ -d VSPHERE -j ESX -c 62579
 python rpt.py -r /home/jian/tr/  -d VSPHERE -j ESX -c 71548
 python rpt.py -r /home/jian/tr -d VSPHERE -j ESX -c 71548 -n vSphere2017_HPTC_iteration3
 python topn.py -r /home/jian/tr -t LPTC_Iteration
+python rpt.py -r /home/jian/tr -d VSPHERE -j ESX -c 54046 -n this_cycle_has_bug
 
 ---------------------------
 INSTALLATION NOTES

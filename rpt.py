@@ -1,32 +1,34 @@
-# -*- coding: utf-8 -*-
-# ! /usr/bin/python
+#!/usr/bin/env python
+#
+# Copyright (C) 2017 VMware, Inc.
+# All Rights Reserved
+#
+
+from __future__ import division
 import requests
 import json
 import logging
 import os
-import glob
 import sys
 import getpass
 import optparse
 import re
 import time
 
-from reportlab.pdfbase import pdfmetrics
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, \
-        Image, Table, LongTable, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, \
+    Image, LongTable, TableStyle
 from reportlab.graphics.charts.piecharts import Pie
 from reportlab.graphics.charts.legends import Legend
 from reportlab.graphics.shapes import Drawing, _DrawingEditorMixin
-from reportlab.lib.colors import Color, PCMYKColor
-from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.colors import PCMYKColor
 from reportlab.platypus.flowables import KeepTogether
 
 DEFAULT_DOMAIN = 'vsphere'
 DEFAULT_PROJECT = 'esx'
 
-log = logging.getLogger(__name__)
+log = logging.getLogger('Rpt')
 loglevel = os.environ.get('LOGLEVEL', 'DEBUG')
 log.setLevel(loglevel)
 
@@ -34,9 +36,9 @@ pieData = {}
 bug_list = []
 No_bug_list = []
 status_dict = {'Passed': 0, 'Failed': 0, 'No Run': 0}
+nbsp_str = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
 
-def process_args(args):
-    usage = "usage: python HP_ALM_REST_API_CLENT.py [domain] -d [top k]"
+def process_args(args, usage):
     parser = optparse.OptionParser(usage=usage)
     parser.add_option("-d", "--domain", dest="domain", action="store",
                       default=DEFAULT_DOMAIN, type="string",
@@ -52,14 +54,22 @@ def process_args(args):
                       type="string", help="cycleid")
     parser.add_option("-n", "--cyclename", dest="cyclename", action="store",
                       type="string", help="cyclename")
-    parser.add_option("-t", "--topn", dest="topn", action="store",
-                      type="string", help="cases or features or bugs")
+    parser.add_option("-u", "--user", dest="user", action="store",
+                      type="string", help="username (Domain user account)")
+    parser.add_option("-p", "--password", dest="password", action="store",
+                      type="string", help="password (Domain user password)")
 
     (options, args) = parser.parse_args(args)
     return (options, args)
 
 
 def setup_logging(logdir):
+    '''
+    Setup log
+    @type logdir: str
+    @param logdir: folder under which to generate log
+    @return: None
+    '''
     global log
     log_format = '%(asctime)s %(lineno)d %(levelname)-6s %(message)s'
     date_format = '%m/%d/%Y %I:%M:%S %p'
@@ -79,26 +89,25 @@ def setup_logging(logdir):
 
 
 class ALMUrl:
-    def __init__(self, domain, project):
-        self.__base = 'https://quality.eng.vmware.com/qcbin'
-        self.__isauth = self.__base + '/rest/is-authenticated'
-        self.__auth = self.__base + '/authentication-point/authenticate'
-        self.__session = self.__base + '/rest/site-session'
-        self.__logout = self.__base + '/authentication-point/logout'
+    '''
+    Class of HPQC access to certain query
+    '''
+    def __init__(self, base_url, domain, project):
+        self.__base = base_url
         self.__work = self.__base + '/rest/domains/' + domain \
                                   + '/projects/' + project
 
     def get_isauth(self):
-        return self.__isauth
+        return self.__base + '/rest/is-authenticated'
 
     def get_auth(self):
-        return self.__auth
+        return self.__base + '/authentication-point/authenticate'
 
     def get_session(self):
-        return self.__session
+        return self.__base + '/rest/site-session'
 
     def get_logout(self):
-        return self.__logout
+        return self.__base + '/authentication-point/logout'
 
     def __getattr__(self, *args):
         result = self.__work
@@ -108,6 +117,9 @@ class ALMUrl:
 
 
 class ALMSession:
+    '''
+    Class of a session to access HPQC
+    '''
     def __init__(self, user, password):
         try:
             self.__headers = {"Accept": "application/json",
@@ -119,31 +131,19 @@ class ALMSession:
             log.error("Exception while creating ALMSession",
                       self.__headers, self.__h)
 
-    def parse_xml(self, obj, dict):
-        almxml = ET.fromstring(obj)
-        if almxml.__dict__.has_key("TotalResults") \
-                and almxml.attrib["TotalResults"] == 0:
-            return
-
-        one_dict = {}
-        for fields in almxml.findall('.//Fields'):
-            one_dict.clear()
-            for field in fields:
-                curval = field.find("Value")
-                if curval is not None and curval.text is not None:
-                    one_dict[field.get('Name').decode('utf-8')] = curval.text
-                    if isinstance(one_dict[field.get('Name')], str):
-                        one_dict[field.get('Name').decode('utf-8')] \
-                                = one_dict[field.get('Name')].decode('utf-8')
-            dict.append(one_dict.copy())
-        return
-
     def parse_json(self, obj):
         obj = json.loads(obj)
         return obj
 
     def is_authed(self, ALMUrl):
-        r = requests.get(ALMUrl.get_isauth(),auth=self.__user_pass)
+        '''
+        @type ALMUrl: str
+        @param ALMUrl: instance of ALMUrl object
+        @rtype: int
+        @return: 0 or 1 or http return code
+        '''
+
+        r = requests.get(ALMUrl.get_isauth(), auth=self.__user_pass)
         if r.status_code == 200:
             log.info("Already authenticated: %s" % ALMUrl.get_isauth())
             return 0
@@ -156,6 +156,13 @@ class ALMSession:
             return int(r.status_code)
 
     def Open(self, ALMUrl):
+        '''
+        @type ALMUrl: str
+        @param ALMUrl: instance of ALMUrl object
+        @rtype: int
+        @return: 0 or http return code as error code
+        '''
+
         r = requests.get(ALMUrl.get_auth(), auth=self.__user_pass)
         if r.status_code is 200:
             mach = re.match(r'LWSSO_COOKIE_KEY=.*?;', r.headers['set-cookie'])
@@ -170,22 +177,41 @@ class ALMSession:
             return int(r.status_code)
 
     def SessionManage(self, ALMUrl):
-        if self.__headers["Cookie"] is not None:
-            r = requests.post(ALMUrl.get_session(), headers=self.__headers,
-                              auth=self.__user_pass)
-            if r.status_code == 201:
-                pattern = re.compile('QCSession=.*?;')
-                result = pattern.findall(r.headers['set-cookie'])
-                self.__headers["Cookie"] += result[0]
-                log.info("[ALMSession] Get session success, URL:%s" \
-                        % ALMUrl.get_session() + 'HEADERS:%s' % self.__headers)
-                return 0
-            else:
-                log.error("[ALMSession] Get session failed, URL:%s" \
-                        % ALMUrl.get_session() + "HEADERS:%s" % self.__headers)
-                return int(r.status_code), None
+        '''
+        @type ALMUrl: str
+        @param ALMUrl: instance of ALMUrl object
+        @rtype: int
+        @return: 0 or http return code as error code
+        '''
+
+        if self.__headers["Cookie"] is None:
+            log.error("[ALMSession] Failed, No cookie! URL:%s HEADERS:%s"
+                      % (ALMUrl.get_session(), self.__headers))
+            return 406, None
+
+        r = requests.post(ALMUrl.get_session(), headers=self.__headers,
+                          auth=self.__user_pass)
+        if r.status_code == 201:
+            pattern = re.compile('QCSession=.*?;')
+            result = pattern.findall(r.headers['set-cookie'])
+            self.__headers["Cookie"] += result[0]
+            log.info("[ALMSession] Success! URL:%s HEADERS:%s"
+                     % (ALMUrl.get_session(), self.__headers))
+            return 0
+        else:
+            log.error("[ALMSession] Failed, URL:%s HEADERS:%s"
+                      % (ALMUrl.get_session(), self.__headers))
+            return int(r.status_code), None
 
     def Close(self, ALMUrl):
+        '''
+        Close ALM Session
+        @type ALMUrl: str
+        @param ALMUrl: instance of ALMUrl object
+        @rtype: int
+        @return: 0 or http return code as error code
+        '''
+
         if self.__headers["Cookie"] is not None:
             r = requests.get(ALMUrl.get_logout(), headers=self.__headers,
                              auth=self.__user_pass)
@@ -194,8 +220,8 @@ class ALMSession:
                     "Logout ALM session success: %s" % ALMUrl.get_logout())
                 return 0
             else:
-                log.error("Failed to close ALM session:%s, %s" \
-                        % (r.status_code, r.reason))
+                log.error("Failed to close ALM session:%s, %s"
+                          % (r.status_code, r.reason))
                 log.error('LOGOUT URL:%s' % ALMUrl.get_logout())
                 log.error('HEADERS:%s' % self.__headers)
                 return int(r.status_code)
@@ -204,16 +230,24 @@ class ALMSession:
             return 1
 
     def Get(self, ALMUrl, *args):
+        '''
+        Get ALM session content
+        @type ALMUrl: str
+        @param ALMUrl: instance of ALMUrl object
+        @rtype: int
+        @return: 0 or http return code as error code
+        '''
+
         if self.__headers["Cookie"] is not None:
             r = requests.get(ALMUrl.__getattr__(*args), headers=self.__headers)
             if r.status_code == 200:
-                log.info("[ALMSession] Get success, URL:%s" \
-                        % ALMUrl.__getattr__(*args))
+                log.info("[ALMSession] Get success, URL:%s"
+                         % ALMUrl.__getattr__(*args))
                 data = self.parse_json(r.content)
                 return 0, data
             else:
-                log.error("[ALMSession] Error getting ALM function: %s,%s" \
-                        % ( r.status_code, r.reason))
+                log.error("[ALMSession] Error getting ALM function: %s, %s"
+                          % (r.status_code, r.reason))
                 log.error("PATH:%s" % ALMUrl.__getattr__(*args))
                 log.error("HEADERS:%s" % self.__headers)
                 return int(r.status_code), None
@@ -223,48 +257,67 @@ class ALMSession:
 
 
 class Reportlab:
+    '''
+    Class of PDF Report
+    '''
+
     def makeForm(self, bug_list, No_bug_list, cmdOpts, report_name):
+        '''
+        Generate pdf file using bug information
+        @type bug_list: list
+        @param bug_list: list of list information
+        @type No_bug_list: list
+        @param No_bug_list: list of cases that failed with no related bug
+        @type cmdOpts: command line options
+        @param cmdOpts: user specified command line options
+        @type report_name: str
+        @param report_name: PDF file name
+        @return: None
+        '''
+
         story = []
         stylesheet = getSampleStyleSheet()
         normalStyle = stylesheet['Normal']
+        resultdir = cmdOpts.resultdir
 
         # report title
         data_format = '<para autoLeading="off" fontSize=15 align=center>' \
-                + '<b>Report for Cycle %s</b><br/><br/><br/></para>'
+            + '<b>Report for Cycle %s</b><br/><br/><br/></para>'
         rpt_title = data_format % (report_name)
         story.append(Paragraph(rpt_title, normalStyle))
 
         data_format = '<para autoLeading="off" fontSize=9 align=center>' \
-                + '<br/><b>1. Test Set ID: %s </b><br/></para>'
-        text = data_format %cmdOpts.cycleid
+            + '<br/><b>1. Test Set ID: %s </b><br/></para>'
+        text = data_format % cmdOpts.cycleid
         story.append(Paragraph(text, normalStyle))
         # test pie chart img
         data_format = '<para autoLeading="off" fontSize=9 align=center>' \
-                + '<br/><b>2. Test Result</b><br/></para>'
+            + '<br/><b>2. Test Result</b><br/></para>'
         text = data_format
         story.append(Paragraph(text, normalStyle))
-        img = Image(os.path.join(cmdOpts.resultdir, 'PieChart000.png'))
+        img = Image(os.path.join(resultdir, 'PieChart000.png'))
         img.drawHeight = 150
         img.drawWidth = 300
         story.append(img)
 
         # bug list table
         data_format = '<para autoLeading="off" fontSize=9 align=center>' \
-                + '<b>3. Bug List</b><br/></para>'
+            + '<b>3. Bug List</b><br/></para>'
         text = data_format
-        story.append(Paragraph(text,normalStyle))
+        story.append(Paragraph(text, normalStyle))
 
-        mylist = ['TestSet', 'Bug_ID', 'Summary', 'Status', \
-            'Priority', 'Reporter', 'Assignee', 'Case_Num', 'CaseName']
-        component_data = [ mylist ]
+        mylist = ['TestSet', 'Bug_ID', 'Summary', 'Status', 'Priority',
+                  'Reporter', 'Assignee', 'Case_Num', 'CaseName']
+        component_data = [mylist]
         th_fmt = '<para autoLeading="off" fontSize=5.5 align=left>%s</para>'
         for item in bug_list:
-            x = [ Paragraph(th_fmt % (item[entry]), normalStyle) \
-                    for entry in mylist ]
+            x = [Paragraph(th_fmt % (item[entry]), normalStyle)
+                 for entry in mylist]
             component_data.append(x)
 
-        component_table = LongTable(component_data, \
-                colWidths=[35, 35, 160, 35, 30, 48, 48, 30, 150])
+        component_table = LongTable(
+            component_data,
+            colWidths=[35, 35, 160, 35, 30, 48, 48, 30, 150])
         table_style = TableStyle([
             ('FONTSIZE', (0, 0), (-1, -1), 5.5),
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
@@ -273,18 +326,18 @@ class Reportlab:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('LINEBEFORE', (0, 0), (0, -1), 0.1, colors.grey),
             ('TEXTCOLOR', (0, 1), (-2, -1), colors.black),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black), ])
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black)])
         component_table.setStyle(table_style)
         story.append(component_table)
 
         # no bug list table
         text = '<para autoLeading="off" fontSize=9 align=center><br/><b>' \
-                + '4.Failed cases with no Bug Linked</b><br/></para>'
-        my2list = ['TestsetID','Case_Num', 'CaseName']
-        component_data = [ my2list ]
+            + '4.Failed cases with no Bug Linked</b><br/></para>'
+        my2list = ['TestsetID', 'Case_Num', 'CaseName']
+        component_data = [my2list]
         for item in No_bug_list:
-            x = [ Paragraph(th_fmt % (item[entry]), normalStyle) \
-                    for entry in my2list ]
+            x = [Paragraph(th_fmt % (item[entry]), normalStyle)
+                 for entry in my2list]
             component_data.append(x)
 
         component_table = LongTable(component_data, colWidths=[35, 35, 500])
@@ -292,17 +345,19 @@ class Reportlab:
         para_no_bug = Paragraph(text, normalStyle)
         story.append(KeepTogether([para_no_bug, component_table]))
 
-        doc = SimpleDocTemplate(os.path.join(cmdOpts.resultdir, \
-                'Rpt-' + report_name + '.pdf'))
+        pdf_name = os.path.join(resultdir, 'Rpt-' + report_name + '.pdf')
+        doc = SimpleDocTemplate(pdf_name)
         doc.build(story)
+        log.info("SUCCESS! Report (%s) is generated." % pdf_name)
 
 
-class PieChart(_DrawingEditorMixin,Drawing):
+class PieChart(_DrawingEditorMixin, Drawing):
     '''
-        pie chart with a basic legend.
+    Class of Pie chart with a basic legend.
     '''
-    def __init__(self,width=400,height=200,*args, **kw):
-        Drawing.__init__(self,width,height,*args, **kw)
+
+    def __init__(self, width=400, height=200, *args, **kw):
+        Drawing.__init__(self, width, height, *args, **kw)
         global pieData
         mycolor = [PCMYKColor(100, 0, 90, 50, alpha=100),
                    PCMYKColor(0, 100, 100, 40, alpha=100),
@@ -318,10 +373,11 @@ class PieChart(_DrawingEditorMixin,Drawing):
             passed = str(round(float(num_pass / total) * 100, 2)) + '%'
             failed = str(round(float(num_fail / total) * 100, 2)) + '%'
             norun = str(round(float(num_norun / total) * 100, 2)) + '%'
-            #pie
+
+            # pie
             self._add(self, Pie(), name='pie', validate=None, desc=None)
             self.pie.strokeWidth = 1
-            self.pie.slices.strokeColor = PCMYKColor(0,0,0,0)
+            self.pie.slices.strokeColor = PCMYKColor(0, 0, 0, 0)
             self.pie.slices.strokeWidth = 1
             self.pie.data = [num_pass, num_fail, num_norun]
             for i in range(len(self.pie.data)):
@@ -331,10 +387,11 @@ class PieChart(_DrawingEditorMixin,Drawing):
             self.pie.height = 150
             self.pie.y = 25
             self.pie.x = 25
-        #legend
-        self._add(self,Legend(),name='legend',validate=None,desc=None)
+
+        # legend
+        self._add(self, Legend(), name='legend', validate=None, desc=None)
         self.legend.columnMaximum = 99
-        self.legend.alignment='right'
+        self.legend.alignment = 'right'
         self.legend.dx = 6
         self.legend.dy = 6
         self.legend.dxTextSpace = 5
@@ -356,84 +413,186 @@ class PieChart(_DrawingEditorMixin,Drawing):
         self.legend.x = 350
 
 
+def query_cycle(almSession, almUrl, cycleid):
+    '''
+    @type almSession: ALMSession
+    @param almSession: instance of HPQC session
+    @type almUrl: ALMUrl
+    @param almUrl: instance of URL to access HPQC
+    @type cycleid: str
+    @param cycleid: testsed ID in HPQC
+    @rtype: list
+    @return: a list of testcase instance in the 'cycleid'
+    '''
+
+    query = 'test-instances?fields=id,name&query={cycle-id[%s];status[Failed]}'
+    data = almSession.Get(almUrl, query % cycleid)
+
+    entity = data[1][u'entities']
+    instance_list = []
+    for i in range(0, int(data[1][u'TotalResults'])):
+        instanceId = entity[i][u'Fields'][0][u'values'][0][u'value']
+        instanceName = entity[i][u'Fields'][1][u'values'][0][u'value']
+        instance_dict = {}
+        instance_dict['instanceId'] = instanceId
+        instance_dict['instanceName'] = instanceName[:-4]
+        instance_list.append(instance_dict)
+    return instance_list
+
+
+def query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug):
+    '''
+    @type almSession: ALMSession
+    @param almSession: instance of HPQC session
+    @type almUrl: ALMUrl
+    @param almUrl: instance of URL to access HPQC
+    @type cycleid: str
+    @param cycleid: testsed ID in HPQC
+    @type instance: dict
+    @param instance: testcase instance
+    @type caseName_NoBug: str
+    @param caseName_NoBug: those cases which failed but had no related bug
+    @rtype: str
+    @return: caseName_NoBug
+    '''
+
+    query2 = 'defect-links?fields=first-endpoint-id&query={second-end' \
+        + 'point-type[test-instance];second-endpoint-id[%s]}'
+
+    case_id = instance['instanceId']
+    case_name = instance['instanceName']
+    data = almSession.Get(almUrl, query2 % case_id)
+    if data[1][u'TotalResults'] != 0:
+        entity = data[1][u'entities']
+        for i in range(0, int(data[1][u'TotalResults'])):
+            defectId = entity[i][u'Fields'][1][u'values'][0][u'value']
+            query_defect(almSession, almUrl, defectId, case_name, cycleid)
+    else:
+        caseName_NoBug = ''.join([caseName_NoBug, nbsp_str, case_name])
+    return caseName_NoBug
+
+
+def query_defect(almSession, almUrl, defectId, case_name, cycleid):
+    '''
+    @type almSession: ALMSession
+    @param almSession: instance of HPQC session
+    @type almUrl: ALMUrl
+    @param almUrl: instance of URL to access HPQC
+    @type defectId: str
+    @param defectId: bug number ID
+    @type case_name: str
+    @param case_name: name of test case
+    @type cycleid: str
+    @param cycleid: testsed ID in HPQC
+    '''
+
+    global bug_list
+    query3 = 'defects?fields=user-template-01,name,status,priority,' \
+            + 'detected-by,owner&query={id[%s]}'
+
+    defect_data = almSession.Get(almUrl, query3 % defectId)
+    bug_field = defect_data[1][u'entities'][0][u'Fields']
+    bug_dict = parse_defect(bug_field, case_name, cycleid)
+    if bug_dict not in bug_list:
+        bug_list.append(bug_dict)
+
+
+def parse_defect(bug_field, case_name, cycleid):
+    '''
+    @type bug_field: list
+    @param bug_field: list of bug field such as 'reporter', 'priority'
+    @type case_name: str
+    @param case_name: the name of testcase which failed due to this bug
+    @type cycleid: str
+    @param cycleid: testsed ID in HPQC
+    '''
+
+    bug_dict = {}
+    bug_dict['TestSet'] = cycleid
+    bug_dict['Bug_ID'] = bug_field[6][u'values'][0][u'value']
+    bug_dict['Status'] = bug_field[2][u'values'][0][u'value']
+    bug_dict['Priority'] = bug_field[3][u'values'][0][u'value']
+    bug_dict['Summary'] = bug_field[4][u'values'][0][u'value']
+    bug_dict['Reporter'] = bug_field[1][u'values'][0][u'value']
+    bug_dict['Assignee'] = bug_field[5][u'values'][0][u'value']
+    bug_dict['Case_Num'] = 1
+    bug_dict['CaseName'] = case_name
+    return bug_dict
+
+
+def query_result(almSession, almUrl, cycleid):
+    '''
+    @type almSession: ALMSession
+    @param almSession: instance of HPQC session
+    @type almUrl: ALMUrl
+    @param almUrl: instance of URL to access HPQC
+    @type cycleid: str
+    @param cycleid: testsed ID in HPQC
+    Global variable 'status_dict' will be updated
+    '''
+
+    global status_dict
+    query4 = 'test-instances?fields=status&query={cycle-id[%s]}'
+
+    data = almSession.Get(almUrl, query4 % cycleid)
+    entity3 = data[1][u'entities']
+    for i in range(0, int(data[1][u'TotalResults'])):
+        status = entity3[i][u'Fields'][1][u'values'][0][u'value']
+        if status == 'Passed':
+            status_dict['Passed'] += 1
+        elif status == 'Failed':
+            status_dict['Failed'] += 1
+        elif status == 'No Run':
+            status_dict['No Run'] += 1
 
 def getBugsByCycleID(almSession, almUrl, cycleid1, cycleid2):
-    global bug_list
-    global status_dict
-    query = "test-instances?fields=id,name&query={cycle-id[%s];status[Failed]}"
-    query2 = "defect-links?fields=first-endpoint-id&query={second-end" \
-            + "point-type[test-instance];second-endpoint-id[%s]}"
-    query3 = "defects?fields=user-template-01,name,status,priority," \
-            + "detected-by,owner&query={id[%s]}"
-    query4 = "test-instances?fields=status&query={cycle-id[%s]}"
-    nbsp_str = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
+    '''
+    Get all bugs which were filed during test cycle
+    @type almSession: ALMSession
+    @param almSession: instance of ALMSession used to access HPQC
+    @type almUrl: ALMUrl
+    @param almUrl: instance of ALMUrl to query HPQC
+    @type cycleid1: str
+    @param cycleid1: start testset id
+    @type cycleid2: str
+    @param cycleid2: end testset id
+    @return: None
+    '''
+
+    global No_bug_list
 
     for cycleid in range(int(cycleid1), int(cycleid2) + 1):
-        data = almSession.Get(almUrl, query % cycleid)
+        instance_list = query_cycle(almSession, almUrl, cycleid)
 
-        instance_list = []
-        myentity = data[1][u'entities']
-        for i in range(0, int(data[1][u'TotalResults'])):
-            instanceId = myentity[i][u'Fields'][0][u'values'][0][u'value']
-            instanceName = myentity[i][u'Fields'][1][u'values'][0][u'value']
-            instance_dict = {}
-            instance_dict['instanceId'] = instanceId
-            instance_dict['instanceName'] = instanceName[:-4]
-            instance_list.append(instance_dict)
-
-        # get defectId_linked
-        caseName_NoBug = ''  # casename list for cases without bug linked
+        caseName_NoBug = ''
         No_bug_dict = {}
         for instance in instance_list:
-            data = almSession.Get(almUrl, query2 % instance['instanceId'])
-
-            if data[1][u'TotalResults'] != 0:
-                entity = data[1][u'entities']
-                for i in range(0, int(data[1][u'TotalResults'])):
-                    defectId = entity[i][u'Fields'][1][u'values'][0][u'value']
-
-                    # get bug_list
-                    defect_data = almSession.Get(almUrl, query3 % defectId)
-                    bug_field = defect_data[1][u'entities'][0][u'Fields']
-                    bug_dict = {}
-                    bug_dict['TestSet'] = cycleid
-                    bug_dict['Bug_ID'] = bug_field[6][u'values'][0][u'value']
-                    bug_dict['Status'] = bug_field[2][u'values'][0][u'value']
-                    bug_dict['Priority'] = bug_field[3][u'values'][0][u'value']
-                    bug_dict['Summary'] = bug_field[4][u'values'][0][u'value']
-                    bug_dict['Reporter'] = bug_field[1][u'values'][0][u'value']
-                    bug_dict['Assignee'] = bug_field[5][u'values'][0][u'value']
-                    bug_dict['Case_Num'] = 1
-                    bug_dict['CaseName'] = instance['instanceName']
-                    if bug_dict not in bug_list:
-                        bug_list.append(bug_dict)
-            else:
-                caseName_NoBug = ''.join([caseName_NoBug, nbsp_str, \
-                        instance['instanceName']])
-
+            query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug)
         No_bug_dict['TestSet'] = cycleid
         No_bug_dict['Case_Num'] = len(caseName_NoBug.split(nbsp_str)) - 1
         No_bug_dict['CaseName'] = caseName_NoBug.lstrip(nbsp_str)
 
         if No_bug_dict not in No_bug_list and No_bug_dict['CaseName'] != '':
             No_bug_list.append(No_bug_dict)
-
-        # get all the test istances
-        data = almSession.Get(almUrl, query4 % cycleid)
-        entity3 = data[1][u'entities']
-        for i in range(0, int(data[1][u'TotalResults'])):
-            status = entity3[i][u'Fields'][1][u'values'][0][u'value']
-            if status == 'Passed':
-                status_dict['Passed'] += 1
-            elif status == 'Failed':
-                status_dict['Failed'] += 1
-            elif status == 'No Run':
-                status_dict['No Run'] += 1
+    
+        query_result(almSession, almUrl, cycleid)
 
 
 def main(args):
+    '''
+    Parse command line options specified by user
+    Get user name and password
+    Fetch bugs information from HPQC
+    Generate PDF file per bugs
+    Generate JSON file per bugs
+    '''
+
+    usage = "usage: python rpt.py [-l|--logdir] [-r|--resultdir] " \
+            + " [-d|--domain] [-j|--project] [-c|--cycleid]" \
+            + " [-u|--user] [-p|--password]"
+
     try:
-        cmdOpts, _ = process_args(args)
+        cmdOpts, _ = process_args(args, usage)
         if not cmdOpts.logdir:
             cmdOpts.logdir = cmdOpts.resultdir
         setup_logging(cmdOpts.logdir)
@@ -451,14 +610,22 @@ def main(args):
         if cmdOpts.cyclename:
             report_name = cmdOpts.cyclename
         else:
-            report_name = time.strftime('%Y.%m.%d_%H.%M.%S', \
-                    time.localtime(time.time()))
+            report_name = time.strftime('%Y.%m.%d_%H.%M.%S',
+                                        time.localtime(time.time()))
 
         # innitial url and almsession
-        almUrl = ALMUrl(cmdOpts.domain, cmdOpts.project)
-        user = raw_input('username:')
-        password = getpass.getpass('password:')
+        base_url = 'https://quality.eng.vmware.com/qcbin'
+        almUrl = ALMUrl(base_url, cmdOpts.domain, cmdOpts.project)
+        if cmdOpts.user:
+            user = cmdOpts.user
+        else:
+            user = raw_input('username:')
+        if cmdOpts.password:
+            password = cmdOpts.password
+        else:
+            password = getpass.getpass('password:')
         almSession = ALMSession(user, password)
+        #almSession = ALMSession('lij', 'You5rong!')
 
         # authenticate
         if almSession.is_authed(almUrl) != 0:
@@ -473,10 +640,13 @@ def main(args):
         for cycleRange in rangeList:
             if '-' in cycleRange:
                 cycleid_list = cycleRange.split('-')
-                getBugsByCycleID(almSession, almUrl, cycleid_list[0], \
-                        cycleid_list[1])
+                getBugsByCycleID(almSession, almUrl, cycleid_list[0],
+                                 cycleid_list[1])
             else:
                 getBugsByCycleID(almSession, almUrl, cycleRange, cycleRange)
+
+        # close session
+        almSession.Close(almUrl)
 
         result_dic = {}
         for item in bug_list:
@@ -484,8 +654,8 @@ def main(args):
                 result_dic[item['Bug_ID']] = item['CaseName']
             elif result_dic[item['Bug_ID']] != item['CaseName']:
                 temp_bug_id = result_dic[item['Bug_ID']]
-                result_dic[item['Bug_ID']] = ''.join(temp_bug_id, 
-                        '<br/>', item['CaseName'])
+                result_dic[item['Bug_ID']] = ''.join(temp_bug_id, '<br/>',
+                                                     item['CaseName'])
 
         for key in result_dic.keys():
             for item in bug_list:
@@ -498,13 +668,11 @@ def main(args):
             if item not in Bug_list:
                 Bug_list.append(item)
 
-        json_file = os.path.join(cmdOpts.resultdir, \
-                'Rpt-' + report_name + '.json')
+        short_name = 'Rpt-' + report_name + '.json'
+        json_file = os.path.join(cmdOpts.resultdir, short_name)
         with open(json_file, 'w') as fh:
             json.dump(Bug_list, fh)
-
-        with open(json_file, 'r') as fh:
-            b2 = json.load(fh)
+        log.info("SUCCESS! Data (%s) is saved." % json_file)
 
         # pie chart
         global pieData
@@ -516,12 +684,7 @@ def main(args):
         reportlab = Reportlab()
         reportlab.makeForm(Bug_list, No_bug_list, cmdOpts, report_name)
 
-        # close session
-        almSession.Close(almUrl)
-
     except Exception as e:
-        usage = "usage: python rpt.py [-l|--logdir] [-r|--resultdir] " \
-                + " [-d|--domain] [-j|--project] [-c|--cycleid]"
         log.error(e)
         log.info(usage)
         exit()
