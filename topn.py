@@ -1,19 +1,22 @@
-# -*- coding: utf-8 -*-
-# ! /usr/bin/python
+#!/usr/bin/env python
+#
+# Copyright (C) 2017 VMware, Inc.
+# All Rights Reserved
+#
+
 import json
 import logging
 import os
 import glob
 import sys
 import optparse
-import re
-import time
-from bug2html import *
+from bug2html import bug2html
 
 log = logging.getLogger(__name__)
 loglevel = os.environ.get('LOGLEVEL', 'DEBUG')
 log.setLevel(loglevel)
 usage = 'usage: python topn.py <-r|--resultdir> <-t|--topn>'
+
 
 def process_args(args):
     global usage
@@ -26,7 +29,14 @@ def process_args(args):
     (options, args) = parser.parse_args(args)
     return options
 
+
 def setup_logging(logdir):
+    '''
+    Setup log
+    @type logdir: str
+    @param logdir: folder under which to generate log
+    @return: None
+    '''
     global log
     log_format = '%(asctime)s %(lineno)d %(levelname)-6s %(message)s'
     date_format = '%m/%d/%Y %I:%M:%S %p'
@@ -46,6 +56,16 @@ def setup_logging(logdir):
 
 
 def collect_topn(resultdir, file_filter):
+    '''
+    Sort the bug list with highest bug number as first
+    and output the result to a file in html format
+    @type resultdir: str
+    @param resultdir: result folder from where to collect bug information
+    @type file_filter: str
+    @param file_filter: search bug info only in those files that pass filter
+    @return: None
+    '''
+
     err_cases = {}
     all_bug = {}
     file_name = 'Rpt-'+file_filter+'*.json'
@@ -54,7 +74,7 @@ def collect_topn(resultdir, file_filter):
         with open(filename, 'r') as json_data:
             bug_data = json.load(json_data)
         for old_bug in bug_data:
-            #print old_bug
+            # print old_bug
             CaseName = old_bug['CaseName']
             bug_id = old_bug['Bug_ID']
             print "Dealing with Bug: " + bug_id + " Case Name: " + CaseName
@@ -67,8 +87,8 @@ def collect_topn(resultdir, file_filter):
                 if case_name in err_cases.keys():
                     that_bug_list = err_cases[case_name]['bugIDs']
                     if bug_id in that_bug_list:
-                        log.info("bug_id [%] is already been in the list." \
-                                % bug_id)
+                        log.info("bug_id [%s] is already been in the list."
+                                 % bug_id)
                     else:
                         err_cases[case_name]['bugIDs'].append(bug_id)
                         err_cases[case_name]['bug_nums'] += 1
@@ -78,25 +98,25 @@ def collect_topn(resultdir, file_filter):
     sorted_cases = sorted(err_cases, key=lambda x: err_cases[x]['bug_nums'])
     sorted_cases.reverse()
 
-    html_data = ["<center><h1>TopN Error Cases of All %s</h1></center>\n" \
-            % file_filter]
+    html_data = ["<center><h1>TopN Error Cases of All %s</h1></center>\n"
+                 % file_filter]
 
     cases_num = len(err_cases.keys())
     sum1_data = '<table border="0"><tr><th align=left>Failed Cases Number: ' \
-            + '%d</th></tr>' % cases_num
+        + '%d</th></tr>' % cases_num
     sum2_data = '<tr><th align=left>Generated Bugs Number: ' \
-            + '%d</th></tr></table>' % len(all_bug.keys())
+        + '%d</th></tr></table>' % len(all_bug.keys())
     html_data.append(sum1_data + sum2_data + '<br>\n')
 
-    order = ['Bug_ID', 'Priority', 'Status', 'Reporter', \
-            'Assignee', 'TestSet', 'Summary']
+    order = ['Bug_ID', 'Priority', 'Status', 'Reporter',
+             'Assignee', 'TestSet', 'Summary']
     for entry in sorted_cases:
         log.debug(entry)
         sorted_id = sorted(err_cases[entry]['bugIDs'])
-        bug_detail_list = [ all_bug[bug_id] for bug_id in sorted_id ]
+        bug_detail_list = [all_bug[bugid] for bugid in sorted_id]
         log.debug(bug_detail_list)
         my_json = {entry: err_cases[entry]['bug_nums'],
-                'Bug List': bug_detail_list}
+                   'Bug List': bug_detail_list}
         html_text = bug2html.convert(json=my_json, order_list=order)
         log.debug(html_text)
         html_data.append(html_text)
@@ -107,6 +127,7 @@ def collect_topn(resultdir, file_filter):
     html_fh = open(os.path.join(resultdir, html_file), 'w')
     html_fh.write(all_str)
     html_fh.close()
+
 
 def main(args):
     global usage
@@ -128,7 +149,6 @@ def main(args):
         exit()
     else:
         collect_topn(cmdOpts.resultdir, cmdOpts.topn)
-        print "Jian: SUCCESS"
 
 if __name__ == "__main__":
     main(sys.argv[1:])

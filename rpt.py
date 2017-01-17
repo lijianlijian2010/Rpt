@@ -38,6 +38,7 @@ No_bug_list = []
 status_dict = {'Passed': 0, 'Failed': 0, 'No Run': 0}
 nbsp_str = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
 
+
 def process_args(args, usage):
     parser = optparse.OptionParser(usage=usage)
     parser.add_option("-d", "--domain", dest="domain", action="store",
@@ -333,10 +334,14 @@ class Reportlab:
         # no bug list table
         text = '<para autoLeading="off" fontSize=9 align=center><br/><b>' \
             + '4.Failed cases with no Bug Linked</b><br/></para>'
-        my2list = ['TestsetID', 'Case_Num', 'CaseName']
+        my2list = ['TestSet', 'Case_Num', 'Cases_Name']
         component_data = [my2list]
+        next_line = '<br>'
         for item in No_bug_list:
-            x = [Paragraph(th_fmt % (item[entry]), normalStyle)
+            old_value = item['Cases_Name']
+            item['Cases_Name'] = next_line.join(old_value)
+
+            x = [Paragraph(th_fmt % item[entry], normalStyle)
                  for entry in my2list]
             component_data.append(x)
 
@@ -440,7 +445,7 @@ def query_cycle(almSession, almUrl, cycleid):
     return instance_list
 
 
-def query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug):
+def query_instance(almSession, almUrl, cycleid, instance):
     '''
     @type almSession: ALMSession
     @param almSession: instance of HPQC session
@@ -450,10 +455,10 @@ def query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug):
     @param cycleid: testsed ID in HPQC
     @type instance: dict
     @param instance: testcase instance
-    @type caseName_NoBug: str
-    @param caseName_NoBug: those cases which failed but had no related bug
-    @rtype: str
-    @return: caseName_NoBug
+    @rtype: set
+    @return: (has_bug_flag, case name) if failed case has linked bug
+        has_bug_flag will be 1, case name is None. Otherwise,
+        has_bug_flag will be 0, case name is the failed case name
     '''
 
     query2 = 'defect-links?fields=first-endpoint-id&query={second-end' \
@@ -467,9 +472,9 @@ def query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug):
         for i in range(0, int(data[1][u'TotalResults'])):
             defectId = entity[i][u'Fields'][1][u'values'][0][u'value']
             query_defect(almSession, almUrl, defectId, case_name, cycleid)
+        return (1, "")
     else:
-        caseName_NoBug = ''.join([caseName_NoBug, nbsp_str, case_name])
-    return caseName_NoBug
+        return (0, case_name)
 
 
 def query_defect(almSession, almUrl, defectId, case_name, cycleid):
@@ -488,7 +493,7 @@ def query_defect(almSession, almUrl, defectId, case_name, cycleid):
 
     global bug_list
     query3 = 'defects?fields=user-template-01,name,status,priority,' \
-            + 'detected-by,owner&query={id[%s]}'
+        + 'detected-by,owner&query={id[%s]}'
 
     defect_data = almSession.Get(almUrl, query3 % defectId)
     bug_field = defect_data[1][u'entities'][0][u'Fields']
@@ -545,6 +550,7 @@ def query_result(almSession, almUrl, cycleid):
         elif status == 'No Run':
             status_dict['No Run'] += 1
 
+
 def getBugsByCycleID(almSession, almUrl, cycleid1, cycleid2):
     '''
     Get all bugs which were filed during test cycle
@@ -564,17 +570,17 @@ def getBugsByCycleID(almSession, almUrl, cycleid1, cycleid2):
     for cycleid in range(int(cycleid1), int(cycleid2) + 1):
         instance_list = query_cycle(almSession, almUrl, cycleid)
 
-        caseName_NoBug = ''
-        No_bug_dict = {}
+        No_bug_dict = {'TestSet': cycleid, 'Case_Num': 0, 'Cases_Name': []}
         for instance in instance_list:
-            query_instance(almSession, almUrl, cycleid, instance, caseName_NoBug)
-        No_bug_dict['TestSet'] = cycleid
-        No_bug_dict['Case_Num'] = len(caseName_NoBug.split(nbsp_str)) - 1
-        No_bug_dict['CaseName'] = caseName_NoBug.lstrip(nbsp_str)
+            (has_bug, case_name) = query_instance(almSession, almUrl,
+                                                  cycleid, instance)
+            if has_bug == 0:
+                No_bug_dict['Case_Num'] += 1
+                No_bug_dict['Cases_Name'].append(case_name)
 
-        if No_bug_dict not in No_bug_list and No_bug_dict['CaseName'] != '':
+        if No_bug_dict not in No_bug_list and No_bug_dict['Case_Num'] > 0:
             No_bug_list.append(No_bug_dict)
-    
+
         query_result(almSession, almUrl, cycleid)
 
 
@@ -625,7 +631,6 @@ def main(args):
         else:
             password = getpass.getpass('password:')
         almSession = ALMSession(user, password)
-        #almSession = ALMSession('lij', 'You5rong!')
 
         # authenticate
         if almSession.is_authed(almUrl) != 0:
@@ -654,8 +659,8 @@ def main(args):
                 result_dic[item['Bug_ID']] = item['CaseName']
             elif result_dic[item['Bug_ID']] != item['CaseName']:
                 temp_bug_id = result_dic[item['Bug_ID']]
-                result_dic[item['Bug_ID']] = ''.join(temp_bug_id, '<br/>',
-                                                     item['CaseName'])
+                result_dic[item['Bug_ID']] = ''.join([temp_bug_id, '<br/>',
+                                                     item['CaseName']])
 
         for key in result_dic.keys():
             for item in bug_list:
