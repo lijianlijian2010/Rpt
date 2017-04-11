@@ -70,14 +70,14 @@ def collect_topn(resultdir, file_filter):
     all_bug = {}
     file_name = 'Rpt-'+file_filter+'*.json'
     for filename in glob.glob(os.path.join(resultdir, file_name)):
-        print filename
+        print(filename)
         with open(filename, 'r') as json_data:
             bug_data = json.load(json_data)
         for old_bug in bug_data:
             # print old_bug
             CaseName = old_bug['CaseName']
             bug_id = old_bug['Bug_ID']
-            print "Dealing with Bug: " + bug_id + " Case Name: " + CaseName
+            print("Dealing with Bug: " + bug_id + " Case Name: " + CaseName)
             old_bug.pop('CaseName')
             old_bug.pop('Case_Num')
             all_bug[bug_id] = old_bug
@@ -134,8 +134,8 @@ def main(args):
 
     cmdOpts = process_args(args)
     if not cmdOpts.resultdir:
-        print 'Must provide "resultdir" to generate topN'
-        print usage
+        print('Must provide "resultdir" to generate topN')
+        print(usage)
         exit()
 
     cmdOpts.logdir = cmdOpts.resultdir

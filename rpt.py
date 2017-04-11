@@ -5,7 +5,14 @@
 #
 
 from __future__ import division
+import csv
 import requests
+# suppress warning 'InsecurePlatform'
+try:
+    import requests.packages.urllib3
+    requests.packages.urllib3.disable_warnings()
+except:
+    pass
 import json
 import logging
 import os
@@ -13,6 +20,7 @@ import sys
 import getpass
 import optparse
 import re
+import subprocess
 import time
 
 from reportlab.lib.styles import getSampleStyleSheet
@@ -37,6 +45,8 @@ bug_list = []
 No_bug_list = []
 status_dict = {'Passed': 0, 'Failed': 0, 'No Run': 0}
 nbsp_str = '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;'
+user = None
+password = None
 
 
 def process_args(args, usage):
@@ -240,18 +250,36 @@ class ALMSession:
         '''
 
         if self.__headers["Cookie"] is not None:
-            r = requests.get(ALMUrl.__getattr__(*args), headers=self.__headers)
-            if r.status_code == 200:
-                log.info("[ALMSession] Get success, URL:%s"
-                         % ALMUrl.__getattr__(*args))
-                data = self.parse_json(r.content)
-                return 0, data
-            else:
-                log.error("[ALMSession] Error getting ALM function: %s, %s"
-                          % (r.status_code, r.reason))
-                log.error("PATH:%s" % ALMUrl.__getattr__(*args))
-                log.error("HEADERS:%s" % self.__headers)
-                return int(r.status_code), None
+            DATA = {}
+            DATA['entities'] = []
+            start_index = 1
+            page_size = 100
+            while True:
+                paged_args = list(args)
+                paged_args[0] = str(paged_args[0]) + \
+                    "&page-size=%d&start-index=%d" % (page_size, start_index)
+                r = requests.get(
+                    ALMUrl.__getattr__(*paged_args), headers=self.__headers)
+                if r.status_code == 200:
+                    log.info("[ALMSession] Get success, URL:%s"
+                             % ALMUrl.__getattr__(*paged_args))
+                    data = self.parse_json(r.content)
+                    if 'TotalResults' not in DATA:
+                        DATA['TotalResults'] = int(data['TotalResults'])
+                    if len(data['entities']) > 0:
+                        DATA['entities'].extend(data['entities'])
+                    if len(DATA['entities']) < DATA['TotalResults']:
+                        start_index = len(DATA['entities']) + 1
+                    else:
+                        break
+                else:
+                    log.error("[ALMSession] Error getting ALM function: %s, %s"
+                              % (r.status_code, r.reason))
+                    log.error("PATH:%s" % ALMUrl.__getattr__(*paged_args))
+                    log.error("HEADERS:%s" % self.__headers)
+                    return int(r.status_code), None
+            return 0, DATA
+
         else:
             log.error("[ALMSession] Error: httplib2.Http not initialized")
             return 1, None
@@ -336,10 +364,11 @@ class Reportlab:
             + '4.Failed cases with no Bug Linked</b><br/></para>'
         my2list = ['TestSet', 'Case_Num', 'Cases_Name']
         component_data = [my2list]
-        next_line = '<br>'
+        # temp fix for syntax error: No content allowed in br tag
+        # next_line = '<br>'
         for item in No_bug_list:
-            old_value = item['Cases_Name']
-            item['Cases_Name'] = next_line.join(old_value)
+            # old_value = item['Cases_Name']
+            # item['Cases_Name'] = next_line.join(old_value)
 
             x = [Paragraph(th_fmt % item[entry], normalStyle)
                  for entry in my2list]
@@ -584,6 +613,93 @@ def getBugsByCycleID(almSession, almUrl, cycleid1, cycleid2):
         query_result(almSession, almUrl, cycleid)
 
 
+def fill_info_buglist(bug_list):
+
+    global user, password
+    # to merge duplicated bug ids first
+    for i in xrange(len(bug_list)):
+        j = i + 1
+        if j >= len(bug_list):
+            break
+        for item in bug_list[j:]:
+            if bug_list[i]['Bug_ID'] == item['Bug_ID']:
+                bug_list[i]['TestSet'] = \
+                    "%s, %s" % (bug_list[i]['TestSet'], item['TestSet'])
+                bug_list[i]['Case_Num'] = \
+                    int(bug_list[i]['Case_Num']) + int(item['Case_Num'])
+                bug_list[i]['CaseName'] = \
+                    "%s, %s" % (bug_list[i]['CaseName'], item['CaseName'])
+                index = bug_list.index(item)
+                del bug_list[index]
+
+    for item in bug_list:
+        # query bug product and category
+        bug_info = {}
+        cmd = ('python /mts/home2/bugzilla/bin/bz.py '
+               '-w product,category %s') % item['Bug_ID']
+        output = subprocess.check_output(cmd, shell=True)
+        for line in output.splitlines():
+            key, value = line.split(": ", 1)
+            bug_info[key.lower().replace(' ', '_')] = value
+        item['Product'] = bug_info['product']
+        item['Category'] = bug_info['category']
+        # query assignee AD Manager
+        assignee_manager = ''
+        cmd = ('/usr/bin/ldapsearch -H ldap://ldap.vmware.com:3268 '
+               '-D"%s@vmware.com" -w "%s" -b "dc=vmware,dc=com" '
+               '-x "(sAMAccountName=%s)"') % (user, password, item['Assignee'])
+        output = subprocess.check_output(cmd, shell=True)
+        m = re.search('manager: CN=(.+?),', output)
+        if m:
+            assignee_manager = m.group(1)
+        item['AssigneeManager'] = assignee_manager
+
+
+def make_csv_reports(bug_list, No_bug_list, cmdOpts, report_name):
+    '''
+    Generate csv files using bug information
+    @type bug_list: list
+    @param bug_list: list of list information
+    @type No_bug_list: list
+    @param No_bug_list: list of cases that failed with no related bug
+    @type cmdOpts: command line options
+    @param cmdOpts: user specified command line options
+    @type report_name: str
+    @param report_name: cvs file names
+    @return: None
+    '''
+
+    fill_info_buglist(bug_list)
+    resultdir = cmdOpts.resultdir
+    buglist_csv = os.path.join(resultdir, 'Buglist-' + report_name + '.csv')
+    with open(buglist_csv, 'w') as csvfile:
+        fieldnames = ['TestSet', 'Bug_ID', 'Product', 'Category',
+                      'Summary', 'Status', 'Priority', 'Reporter',
+                      'Assignee', 'AssigneeManager', 'Case_Num', 'CaseName']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        for item in bug_list:
+            item['CaseName'] = item['CaseName'].replace("<br/>", " ")
+            writer.writerow(item)
+    log.info("SUCCESS! Bug list csv file (%s) is generated." % buglist_csv)
+    nobug_list = []
+    for nobug_item in No_bug_list:
+        for case_name in nobug_item['Cases_Name']:
+            item = {}
+            item['TestSet'] = nobug_item['TestSet']
+            item['CaseName'] = case_name
+            nobug_list.append(item)
+    nobuglist_csv = os.path.join(
+        resultdir,
+        'Failed_cases_without_bug-' + report_name + '.csv')
+    with open(nobuglist_csv, 'w') as csvfile:
+        fieldnames = ['TestSet', 'CaseName']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        for item in nobug_list:
+            writer.writerow(item)
+    log.info("SUCCESS! Non-pass cases list without bugs "
+             "are placed in csv file (%s)." % nobuglist_csv)
+
+
 def main(args):
     '''
     Parse command line options specified by user
@@ -593,6 +709,7 @@ def main(args):
     Generate JSON file per bugs
     '''
 
+    global user, password
     usage = "usage: python rpt.py [-l|--logdir] [-r|--resultdir] " \
             + " [-d|--domain] [-j|--project] [-c|--cycleid]" \
             + " [-u|--user] [-p|--password]"
@@ -688,6 +805,9 @@ def main(args):
         # generate the report
         reportlab = Reportlab()
         reportlab.makeForm(Bug_list, No_bug_list, cmdOpts, report_name)
+
+        # generate csv report files
+        make_csv_reports(Bug_list, No_bug_list, cmdOpts, report_name)
 
     except Exception as e:
         log.error(e)

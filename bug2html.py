@@ -25,7 +25,7 @@ class bug2html:
         '''
 
         bug_list = json.pop(bug_list_name)
-        case_name = json.keys()[0]
+        case_name = list(json.keys())[0]
         bug_num = json[case_name]
 
         header = '<center><b> %s : %d </b></center>\n' % (case_name, bug_num)
